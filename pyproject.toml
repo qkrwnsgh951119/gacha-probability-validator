@@ -21,3 +21,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 테스트 실행 시 로그를 바로 화면(터미널, VSCode Test Results)에 출력
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(message)s"
