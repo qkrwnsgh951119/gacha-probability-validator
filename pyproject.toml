@@ -21,7 +21,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 테스트 실행 시 로그를 바로 화면(터미널, VSCode Test Results)에 출력
-log_cli = true
-log_cli_level = "INFO"
-log_cli_format = "%(message)s"
+# 출력은 tests/conftest.py가 읽기 쉬운 보고서로 만든다. 진행률 [NN%] 표시는 끈다.
+console_output_style = "classic"

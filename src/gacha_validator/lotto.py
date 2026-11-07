@@ -8,6 +8,7 @@ import random
 from dataclasses import dataclass
 
 from .stats import RateTestResult, test_rate
+from .textfmt import format_table
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +83,14 @@ def simulate(
     show_first: int = 10,
     progress_every: int = 100,
     verbose: bool = True,
+    report: bool | None = None,
 ) -> SimulationResult:
     """상자를 opens번 열고, 등급별 결과가 설정 확률과 맞는지 검정해 로그로 남긴다.
 
     seed를 주지 않으면 매번 새로운 무작위 결과가 나온다. 사용한 seed는 로그에
     남으므로, 같은 seed를 넘기면 그 실행을 그대로 재현할 수 있다.
-    verbose=False면 로그를 남기지 않는다.
+    verbose=False면 개봉 로그를 남기지 않는다. report는 마지막 결과 요약 표를
+    남길지 여부로, 생략하면 verbose를 따른다.
     """
     if opens <= 0:
         raise ValueError("opens는 1 이상이어야 합니다.")
@@ -120,7 +123,7 @@ def simulate(
         for p in box.prizes
     )
     result = SimulationResult(box.name, opens, seed, alpha, stats)
-    if verbose:
+    if verbose if report is None else report:
         _log_report(result)
     return result
 
@@ -129,24 +132,23 @@ def _log_report(result: SimulationResult) -> None:
     a = result.per_prize_alpha
     logger.info("")
     logger.info("----- 결과 요약 -----")
-    # 한글은 화면에서 2칸을 차지해 % 포맷 폭이 어긋나므로 머리글은 직접 맞춘다.
-    logger.info(
-        "등급      설정확률    기대횟수    실제횟수    실제확률   95% 신뢰구간            p-value  판정"
-    )
-    for s in result.stats:
-        t = s.test
-        logger.info(
-            "%-5s %10.2f%% %11.1f %11d %10.2f%%   %6.2f%% ~ %6.2f%%  %10.4f  %s",
+    # 한글은 화면에서 2칸을 차지하므로 format_table로 화면 폭 기준 정렬한다.
+    rows = [
+        (
             s.prize.name,
-            s.prize.rate * 100,
-            s.expected_hits,
-            t.hits,
-            t.observed_rate * 100,
-            t.ci_low * 100,
-            t.ci_high * 100,
-            t.p_value,
-            "정상" if t.is_consistent(a) else "불일치",
+            f"{s.prize.rate:.2%}",
+            f"{s.expected_hits:,.1f}",
+            f"{s.test.hits:,}",
+            f"{s.test.observed_rate:.2%}",
+            f"{s.test.ci_low:.2%} ~ {s.test.ci_high:.2%}",
+            f"{s.test.p_value:.4f}",
+            "정상" if s.test.is_consistent(a) else "불일치",
         )
+        for s in result.stats
+    ]
+    headers = ("등급", "설정확률", "기대횟수", "실제횟수", "실제확률", "95% 신뢰구간", "p-value", "판정")
+    for line in format_table(headers, rows, align="<>>>>>><"):
+        logger.info(line)
 
     for s in result.stats:
         if s.expected_hits < 5:
