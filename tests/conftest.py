@@ -49,7 +49,8 @@ def pytest_addoption(parser):
 class TC:
     """테스트 하나의 보고 내용. 테스트 함수는 `tc` 픽스처로 받아 채운다."""
 
-    no: int
+    no: int | None  # 테스트 시트의 TC 번호. 시트에 없는 테스트는 None (보조 점검)
+    aux: int | None  # 보조 점검 순번
     nodeid: str
     group: str
     name: str
@@ -62,7 +63,12 @@ class TC:
 
     @property
     def label(self) -> str:
-        return f"TC-{self.no}"
+        return f"TC-{self.no}" if self.no is not None else f"보조-{self.aux}"
+
+    @property
+    def sort_key(self) -> tuple[int, int]:
+        """시트 TC를 번호순으로 먼저, 보조 점검을 그 뒤에."""
+        return (0, self.no) if self.no is not None else (1, self.aux)
 
     def line(self, text: str = "") -> None:
         self.lines.append(text)
@@ -119,7 +125,7 @@ def _sheet_no(item) -> int | None:
     return no
 
 
-def _make_record(no: int, item, shared: dict) -> TC:
+def _make_record(no: int | None, aux: int | None, item, shared: dict) -> TC:
     marker = item.get_closest_marker("tc")
     if marker:
         name, check = marker.args[:2]
@@ -134,7 +140,9 @@ def _make_record(no: int, item, shared: dict) -> TC:
         # pytest는 한글 id를 \uXXXX로 바꿔 두므로 화면용으로 되돌린다
         case = callspec.id.encode("ascii", "backslashreplace").decode("unicode_escape")
         name = f"{name} ({case})"
-    return TC(no, item.nodeid, group, name, check, shared=shared)
+    if no is None:
+        group = "보조 점검"  # 테스트 시트에 없는 테스트
+    return TC(no, aux, item.nodeid, group, name, check, shared=shared)
 
 
 # ───────────────────────── 보고서 출력 ─────────────────────────
@@ -147,7 +155,7 @@ def _tr(config):
 def pytest_collection_finish(session):
     config = session.config
     records = config.stash[RECORDS]
-    # 시트 번호가 있는 테스트는 그 번호로, 없는 테스트는 그 뒤에 이어서 번호를 매긴다.
+    # 시트 번호(no=)가 있는 테스트는 TC-번호로, 없는 테스트는 '보조-순번'으로 표시한다.
     fixed = {item.nodeid: _sheet_no(item) for item in session.items}
     owner: dict[int, str] = {}
     for nodeid, no in fixed.items():
@@ -156,12 +164,13 @@ def pytest_collection_finish(session):
         if no in owner:
             raise pytest.UsageError(f"TC-{no} 번호가 두 테스트에 겹칩니다: {owner[no]}, {nodeid}")
         owner[no] = nodeid
-    next_no = max(owner, default=0) + 1
+    aux = 0
     for item in session.items:
         no = fixed[item.nodeid]
         if no is None:
-            no, next_no = next_no, next_no + 1
-        records[item.nodeid] = _make_record(no, item, config.stash[SHARED])
+            aux += 1
+        records[item.nodeid] = _make_record(no, aux if no is None else None, item,
+                                            config.stash[SHARED])
     if not config.stash[ENABLED] or _tr(config) is None:
         return
 
@@ -267,7 +276,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     if not config.stash[ENABLED]:
         return
     tr = terminalreporter
-    records = sorted(config.stash[RECORDS].values(), key=lambda r: r.no)
+    records = sorted(config.stash[RECORDS].values(), key=lambda r: r.sort_key)
     if not records:
         return
 
@@ -279,14 +288,22 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     for line in format_table(("TC", "구분", "검증 항목", "결과"), rows, align="<<<<"):
         tr.write_line("  " + line)
 
-    passed = sum(r.outcome == "passed" for r in records)
     bad = [r for r in records if r.outcome in ("failed", "error")]
-    skipped = sum(r.outcome == "skipped" for r in records)
+
+    def count_line(title: str, group: list[TC]) -> str:
+        passed = sum(r.outcome == "passed" for r in group)
+        failed = sum(r.outcome in ("failed", "error") for r in group)
+        skipped = sum(r.outcome == "skipped" for r in group)
+        text = f"{title} {len(group)}건 (통과 {passed} · 실패 {failed}"
+        return text + (f" · 건너뜀 {skipped})" if skipped else ")")
+
+    sheet = [r for r in records if r.no is not None]
+    extra = [r for r in records if r.no is None]
     tr.write_line("")
-    counts = f"총 {len(records)}건 · 통과 {passed}건 · 실패 {len(bad)}건"
-    if skipped:
-        counts += f" · 건너뜀 {skipped}건"
-    tr.write_line(f"  {counts}")
+    parts = [count_line("TC", sheet)] if sheet else []
+    if extra:
+        parts.append(count_line("보조 점검", extra))
+    tr.write_line("  " + " · ".join(parts))
 
     errors = [r for r in bad if r.outcome == "error"]
     box_bad = [r for r in bad if r.outcome == "failed" and r.group == "상자 검증"]

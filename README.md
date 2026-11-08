@@ -1,4 +1,20 @@
-# gacha-probability-validator
+# 🎲 가챠 확률 검증 — 게임 QA 포트폴리오
+
+확률형 아이템이 **공시 확률대로 동작하는지** 기획서 기반으로 TC를 설계하고,
+의도적으로 버그를 주입한 빌드에서 이를 검출 → 리포트 → 재검증까지 진행한 프로젝트입니다.
+
+| 문서 | 링크 |
+|---|---|
+| 📜 기획서 | [Lotto Test 상자 기획서](https://app.notion.com/p/41281d9e60f18177be66cde5f1853333) |
+| 📋 TC 시트 (TC-1~10) | [Google Sheets](https://docs.google.com/spreadsheets/d/1-is9qFZpDN8WEvvZoMZUX0I7sRLgb85o9MWamCrEgYU/edit) |
+| 🐞 버그 리포트 | [BUG-1](https://app.notion.com/p/41281d9e60f1810e935cd73abf631622) · [BUG-2](https://app.notion.com/p/41281d9e60f18102b51bd70c161a442e) |
+
+**결과 요약**
+- 버그 빌드: TC-1(확률표 합계), TC-2(등급별 확률) Fail → 1등·4등 설정값 오류 2건 발견 (Critical)
+- 수정 빌드 재검증: TC-1~10 전체 Pass → 두 티켓 Closed
+- 판정 기준: 전체 유의수준 1%, 4개 등급 동시 검사이므로 등급별 0.25% (다중검정 보정)
+
+---
 
 게임사가 공시한 가챠 확률과 실제 뽑기 결과가 통계적으로 맞는지 검증합니다.
 가상의 뽑기 상자를 수천 번 열어 보는 시뮬레이션으로, 설정한 확률대로 아이템이 나오는지 확인할 수도 있습니다.
