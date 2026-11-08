@@ -1,3 +1,4 @@
+import functools
 import math
 import random
 import sys
@@ -21,7 +22,7 @@ LOTTO_TEST = LottoBox(
 )
 
 # ── 실행 설정: 여기 두 값만 바꿔서 돌리면 됩니다 ──
-MODE = "bug"  # "normal": 정상 상자 / "bug": 버그 버전 상자 (lotto_buggy.py)
+MODE = "normal"  # "normal": 정상 상자 / "bug": 버그 버전 상자 (lotto_buggy.py)
 OPENS = 10_000  # 개봉 횟수: 1_000(천) / 10_000(만) / 100_000(십만) 등
 # 명령줄에서는 파일을 고치지 않고 덮어쓸 수 있습니다:
 #   pytest tests/test_lotto.py --mode bug --opens 100000
@@ -103,8 +104,44 @@ def opens_needed(rate: float, alpha: float) -> int:
 # ───────────────────────── 상자 검증 ─────────────────────────
 
 
+@pytest.mark.tc("확률표 합계 확인", "실제 뽑기에 쓰는 확률표의 합계가 100%인지",
+                group="상자 검증", no=1)
+def test_rate_table_sums_to_100(box, tc):
+    """실제 뽑기에 쓰는 확률표의 합계가 100%인지 확인한다."""
+    actual = getattr(box, "actual_rates", None) or tuple(p.rate for p in box.prizes)
+    total = sum(actual)
+    ok = abs(total - 1) <= 1e-9
+
+    rows = [
+        (p.name, fmt_pct(p.rate), fmt_pct(r), f"{r / total:.2%}" if total else "-")
+        for p, r in zip(box.prizes, actual)
+    ]
+    rows.append(("합계", fmt_pct(sum(p.rate for p in box.prizes)), fmt_pct(total), "100.00%"))
+    tc.table(("등급", "공시 확률", "실제 설정값", "실제로 나오는 확률"), rows, align="<>>>")
+
+    changed = [p.name for p, r in zip(box.prizes, actual) if abs(p.rate - r) > 1e-12]
+    if ok:
+        tc.explain("확률표 합계가 정확히 100%입니다." if not changed else
+                   "확률표 합계는 100%입니다.")
+    else:
+        short = (1 - total) * 100
+        word = "모자랍니다" if short > 0 else "넘칩니다"
+        tc.explain(f"실제 확률표 합계가 {fmt_pct(total)}로, 100%보다 {f"{abs(short):.7f}".rstrip("0").rstrip(".")}%p {word}.")
+        # 합계가 100%가 아니면 나머지가 비율대로 나눠 붙어, 설정값을 안 바꾼 등급의 확률도 바뀐다
+        untouched = [(p, r / total) for p, r in zip(box.prizes, actual)
+                     if r > 0 and p.name not in changed]
+        if untouched:
+            p, eff = max(untouched, key=lambda x: abs(x[1] - x[0].rate))
+            tc.explain(f"그 차이가 다른 등급에 비율대로 나눠 붙어서, 설정값을 안 바꾼 {eun(p.name)} "
+                       f"{fmt_pct(p.rate)}가 아니라 {eff:.2%}로 나오게 됩니다.")
+    if changed:
+        tc.explain(f"또 {eun(', '.join(changed))} 실제 설정값이 공시 확률과 다릅니다.")
+
+    assert ok, f"확률표 합계가 100%가 아닙니다: {total:.7%}"
+
+
 @pytest.mark.tc("등급별 확률 검증", "상자를 여러 번 열어 등급별로 설정 확률대로 나오는지 비교",
-                group="상자 검증")
+                group="상자 검증", no=2)
 def test_lotto_box_matches_configured_rates(box, opens, detail, tc):
     """상자를 OPENS번 열어 등급별 결과가 설정(공시) 확률대로 나오는지 검증한다.
 
@@ -163,42 +200,8 @@ def test_lotto_box_matches_configured_rates(box, opens, detail, tc):
     assert result.is_consistent(), f"설정 확률과 불일치 (seed={result.seed})"
 
 
-@pytest.mark.tc("확률표 합계 확인", "실제 뽑기에 쓰는 확률표의 합계가 100%인지", group="상자 검증")
-def test_rate_table_sums_to_100(box, tc):
-    """실제 뽑기에 쓰는 확률표의 합계가 100%인지 확인한다."""
-    actual = getattr(box, "actual_rates", None) or tuple(p.rate for p in box.prizes)
-    total = sum(actual)
-    ok = abs(total - 1) <= 1e-9
-
-    rows = [
-        (p.name, fmt_pct(p.rate), fmt_pct(r), f"{r / total:.2%}" if total else "-")
-        for p, r in zip(box.prizes, actual)
-    ]
-    rows.append(("합계", fmt_pct(sum(p.rate for p in box.prizes)), fmt_pct(total), "100.00%"))
-    tc.table(("등급", "공시 확률", "실제 설정값", "실제로 나오는 확률"), rows, align="<>>>")
-
-    changed = [p.name for p, r in zip(box.prizes, actual) if abs(p.rate - r) > 1e-12]
-    if ok:
-        tc.explain("확률표 합계가 정확히 100%입니다." if not changed else
-                   "확률표 합계는 100%입니다.")
-    else:
-        short = (1 - total) * 100
-        word = "모자랍니다" if short > 0 else "넘칩니다"
-        tc.explain(f"실제 확률표 합계가 {fmt_pct(total)}로, 100%보다 {f"{abs(short):.7f}".rstrip("0").rstrip(".")}%p {word}.")
-        # 합계가 100%가 아니면 나머지가 비율대로 나눠 붙어, 설정값을 안 바꾼 등급의 확률도 바뀐다
-        untouched = [(p, r / total) for p, r in zip(box.prizes, actual)
-                     if r > 0 and p.name not in changed]
-        if untouched:
-            p, eff = max(untouched, key=lambda x: abs(x[1] - x[0].rate))
-            tc.explain(f"그 차이가 다른 등급에 비율대로 나눠 붙어서, 설정값을 안 바꾼 {eun(p.name)} "
-                       f"{fmt_pct(p.rate)}가 아니라 {eff:.2%}로 나오게 됩니다.")
-    if changed:
-        tc.explain(f"또 {eun(', '.join(changed))} 실제 설정값이 공시 확률과 다릅니다.")
-
-    assert ok, f"확률표 합계가 100%가 아닙니다: {total:.7%}"
-
-
-@pytest.mark.tc("결과 재현성", "같은 seed(난수 시작값)로 두 번 돌리면 결과가 똑같은지", group="상자 검증")
+@pytest.mark.tc("결과 재현성", "같은 seed(난수 시작값)로 두 번 돌리면 결과가 똑같은지",
+                group="상자 검증", no=3)
 def test_same_seed_gives_same_result(box, opens, tc):
     """같은 seed로 두 번 돌리면 결과가 똑같아야 한다."""
     a = simulate(box, opens=opens, seed=42, verbose=False)
@@ -214,7 +217,8 @@ def test_same_seed_gives_same_result(box, opens, tc):
 # ──────────────── 도구 점검 (모드와 무관, 항상 정상 상자 기준) ────────────────
 
 
-@pytest.mark.tc("조작 상자 탐지", "1등이 실제로는 0.3%인 조작 상자를 공지 1% 기준으로 검사하면 잡아내는지")
+@pytest.mark.tc("조작 상자 탐지", "1등이 실제로는 0.3%인 조작 상자를 공지 1% 기준으로 검사하면 잡아내는지",
+                no=4)
 def test_rigged_box_is_detected(tc):
     """실제로는 1등이 0.3%만 나오는 조작된 상자를, 1% 상자로 검증하면 불일치로 잡아내야 한다."""
     rigged = LottoBox(
@@ -235,48 +239,69 @@ def test_rigged_box_is_detected(tc):
     assert caught
 
 
-@pytest.mark.tc("독립시행 확인", "직전 결과나 오래 안 나온 것이 다음 확률에 영향을 주지 않는지 (20만 번)")
-def test_each_open_is_independent(tc):
-    """매 개봉이 독립시행인지 확인한다.
-
-    1) 직전에 X가 나왔어도 다음에 X가 나올 확률은 그대로여야 한다. (연속 당첨 보정 없음)
-    2) 1등이 100번 넘게 안 나왔어도 다음 1등 확률은 그대로 1%여야 한다. (천장/보정 없음)
-    표본을 충분히 모으려고 20만 번 연다. (seed 고정: 매번 같은 결과로 검증)
-    """
-    opens = 200_000
+@functools.cache
+def independence_sample() -> tuple[str, ...]:
+    """TC-5, TC-6이 함께 쓰는 개봉 결과. 정상 상자를 20만 번 연다. (seed 고정: 매번 같은 결과)"""
     rng = random.Random(2026)
-    results = [LOTTO_TEST.open(rng).name for _ in range(opens)]
-    pairs = list(zip(results, results[1:]))  # (직전 결과, 다음 결과)
+    return tuple(LOTTO_TEST.open(rng).name for _ in range(200_000))
 
-    checks = []  # (상황, 다음 결과, 당첨, 시도, 설정 확률, 검정 결과)
-    for prize in LOTTO_TEST.prizes:
-        after_same = [nxt for prev, nxt in pairs if prev == prize.name]
-        hits = sum(nxt == prize.name for nxt in after_same)
-        r = rate_test(pulls=len(after_same), hits=hits, advertised_rate=prize.rate)
-        checks.append((f"직전에 {prize.name}", f"또 {prize.name}", hits, len(after_same), prize.rate, r))
 
-    # 1등이 100번 이상 연속으로 안 나온 직후의 1등 확률
-    streak, trials, hits = 0, 0, 0
-    for name in results:
-        if streak >= 100:
-            trials += 1
-            hits += name == "1등"
-        streak = 0 if name == "1등" else streak + 1
-    r = rate_test(pulls=trials, hits=hits, advertised_rate=0.01)
-    checks.append(("1등 100연속 꽝 뒤", "1등", hits, trials, 0.01, r))
-
+def condition_table(tc, checks) -> list:
+    """(상황, 다음 결과, 당첨, 시도, 설정 확률, 검정 결과) 목록을 표로 그리고, 어긋난 것만 돌려준다."""
     tc.table(
         ("상황", "다음 결과", "횟수", "실제 확률", "설정 확률", "판정"),
         [(s, n, f"{h:,}/{t:,}", f"{rr.observed_rate:.2%}", fmt_pct(p),
           "✅" if rr.is_consistent(0.01) else "❌") for s, n, h, t, p, rr in checks],
         align="<<>>><",
     )
-    bad = [c for c in checks if not c[5].is_consistent(0.01)]
+    return [c for c in checks if not c[5].is_consistent(0.01)]
+
+
+@pytest.mark.tc("독립시행 확인", "직전에 나온 결과가 다음 결과의 확률에 영향을 주지 않는지 (20만 번)", no=5)
+def test_each_open_is_independent(tc):
+    """직전에 X가 나왔어도 다음에 X가 나올 확률은 그대로여야 한다. (연속 당첨 보정 없음)"""
+    results = independence_sample()
+    pairs = list(zip(results, results[1:]))  # (직전 결과, 다음 결과)
+
+    checks = []
+    for prize in LOTTO_TEST.prizes:
+        after_same = [nxt for prev, nxt in pairs if prev == prize.name]
+        hits = sum(nxt == prize.name for nxt in after_same)
+        r = rate_test(pulls=len(after_same), hits=hits, advertised_rate=prize.rate)
+        checks.append((f"직전에 {prize.name}", f"또 {prize.name}", hits, len(after_same), prize.rate, r))
+
+    bad = condition_table(tc, checks)
     if not bad:
-        tc.explain("직전 결과나 오래 안 나온 것과 상관없이 매번 같은 확률로 뽑힙니다. (천장·보정 없음)")
-    for s, n, h, t, p, rr in bad:
+        tc.explain("직전에 무엇이 나왔든 다음 뽑기는 매번 같은 확률로 뽑힙니다.")
+    for s, n, _, _, p, rr in bad:
         tc.explain(f"- '{s}' 다음에 '{n}' 확률이 {rr.observed_rate:.2%}로 설정 {fmt_pct(p)}와 달라요. "
                    "이전 결과가 다음 뽑기에 영향을 주고 있을 수 있습니다.")
+    assert not bad
+
+
+STREAK = 100  # 이만큼 연속으로 1등이 안 나온 뒤를 본다
+
+
+@pytest.mark.tc("연속 미당첨 후 보정 없음 확인",
+                f"1등이 {STREAK}번 넘게 연속으로 안 나온 뒤에도 1등 확률이 그대로 1%인지 (20만 번)", no=6)
+def test_no_pity_after_losing_streak(tc):
+    """1등이 STREAK번 넘게 안 나왔어도 다음 1등 확률은 그대로 1%여야 한다. (천장/보정 없음)"""
+    first = LOTTO_TEST.prizes[0]
+    streak, trials, hits = 0, 0, 0
+    for name in independence_sample():
+        if streak >= STREAK:
+            trials += 1
+            hits += name == first.name
+        streak = 0 if name == first.name else streak + 1
+    r = rate_test(pulls=trials, hits=hits, advertised_rate=first.rate)
+
+    bad = condition_table(tc, [(f"{first.name} {STREAK}연속 꽝 뒤", first.name, hits, trials, first.rate, r)])
+    if not bad:
+        tc.explain(f"오래 안 나와도 {first.name} 확률이 올라가지 않습니다. (천장·보정 없음)")
+    else:
+        direction = "올라갑니다" if r.observed_rate > first.rate else "내려갑니다"
+        tc.explain(f"{STREAK}번 연속 꽝 뒤에는 {first.name} 확률이 {r.observed_rate:.2%}로, "
+                   f"설정 {fmt_pct(first.rate)}보다 {direction}. 숨은 천장이나 보정이 있을 수 있습니다.")
     assert not bad
 
 
@@ -287,7 +312,7 @@ INVALID_BOXES = [
 ]
 
 
-@pytest.mark.tc("잘못된 확률표 거부", "잘못된 확률표를 넣으면 오류로 막는지")
+@pytest.mark.tc("잘못된 확률표 거부", "잘못된 확률표를 넣으면 오류로 막는지", no=7)  # 경우 3개: TC-7~9
 @pytest.mark.parametrize("prizes,problem", INVALID_BOXES)
 def test_invalid_box_is_rejected(prizes, problem, tc):
     tc.check = f"{problem} 확률표를 넣으면 오류로 막는지"

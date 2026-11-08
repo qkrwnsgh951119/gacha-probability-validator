@@ -62,7 +62,7 @@ class TC:
 
     @property
     def label(self) -> str:
-        return f"TC-{self.no:02d}"
+        return f"TC-{self.no}"
 
     def line(self, text: str = "") -> None:
         self.lines.append(text)
@@ -76,7 +76,7 @@ class TC:
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "tc(name, check, group): 보고서에 표시할 TC 이름·확인 내용·구분"
+        "markers", "tc(name, check, group, no): 보고서에 표시할 TC 이름·확인 내용·구분·번호"
     )
     config.stash[STARTED] = datetime.now()
     config.stash[ENABLED] = not config.getoption("--raw")
@@ -101,6 +101,22 @@ def tc(request) -> TC:
 def detail(request) -> bool:
     """-v(--verbose)로 실행했으면 True: 개별 개봉·누적 집계를 출력한다."""
     return request.config.stash[DETAIL]
+
+
+def _sheet_no(item) -> int | None:
+    """@pytest.mark.tc(..., no=N)로 정한 TC 번호 (테스트 시트 기준).
+
+    여러 경우로 나눠 도는 테스트는 no가 첫 경우 번호이고, 다음 경우부터 1씩 늘어난다.
+    (예: no=7이면 경우 3개가 TC-7, TC-8, TC-9)
+    """
+    marker = item.get_closest_marker("tc")
+    if marker is None or "no" not in marker.kwargs:
+        return None
+    no = marker.kwargs["no"]
+    callspec = getattr(item, "callspec", None)
+    if callspec is not None and callspec.indices:
+        no += next(iter(callspec.indices.values()))
+    return no
 
 
 def _make_record(no: int, item, shared: dict) -> TC:
@@ -131,7 +147,20 @@ def _tr(config):
 def pytest_collection_finish(session):
     config = session.config
     records = config.stash[RECORDS]
-    for no, item in enumerate(session.items, 1):
+    # 시트 번호가 있는 테스트는 그 번호로, 없는 테스트는 그 뒤에 이어서 번호를 매긴다.
+    fixed = {item.nodeid: _sheet_no(item) for item in session.items}
+    owner: dict[int, str] = {}
+    for nodeid, no in fixed.items():
+        if no is None:
+            continue
+        if no in owner:
+            raise pytest.UsageError(f"TC-{no} 번호가 두 테스트에 겹칩니다: {owner[no]}, {nodeid}")
+        owner[no] = nodeid
+    next_no = max(owner, default=0) + 1
+    for item in session.items:
+        no = fixed[item.nodeid]
+        if no is None:
+            no, next_no = next_no, next_no + 1
         records[item.nodeid] = _make_record(no, item, config.stash[SHARED])
     if not config.stash[ENABLED] or _tr(config) is None:
         return
@@ -238,7 +267,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     if not config.stash[ENABLED]:
         return
     tr = terminalreporter
-    records = list(config.stash[RECORDS].values())
+    records = sorted(config.stash[RECORDS].values(), key=lambda r: r.no)
     if not records:
         return
 
