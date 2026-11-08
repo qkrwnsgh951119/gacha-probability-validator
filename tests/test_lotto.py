@@ -321,6 +321,38 @@ def test_invalid_box_is_rejected(prizes, problem, tc):
     tc.explain(f"잘못된 설정을 미리 막아 줍니다. (안내 문구: {e.value})")
 
 
+@pytest.mark.tc("구성품 외 결과 없음", "상자를 열었을 때 구성품 목록에 있는 아이템만 나오는지",
+                group="상자 검증", no=10)
+def test_open_returns_only_listed_prizes(box, opens, tc):
+    """개봉 결과가 상자 구성품(prizes) 중 하나가 아니면 실패한다. (None, 목록에 없는 아이템 등)"""
+    names = [p.name for p in box.prizes]
+    tc.check = (f"{box.name} 상자를 {opens:,}번 열어, 구성품 {len(names)}종"
+                f"({', '.join(names)}) 외의 결과가 나오지 않는지")
+    rng = random.Random(10)
+    counts = {p.name: 0 for p in box.prizes}
+    others: dict[str, int] = {}  # 구성품 외 결과 → 나온 횟수
+    for _ in range(opens):
+        got = box.open(rng)
+        if got in box.prizes:
+            counts[got.name] += 1
+        else:
+            others[repr(got)] = others.get(repr(got), 0) + 1
+
+    rows = [(name, "구성품", f"{n:,}") for name, n in counts.items()]
+    rows += [(shown, "구성품 아님 ❌", f"{n:,}") for shown, n in others.items()]
+    tc.table(("나온 결과", "구분", "횟수"), rows, align="<<>")
+
+    n_bad = sum(others.values())
+    if not n_bad:
+        tc.explain(f"{opens:,}번 모두 구성품 {len(names)}종 중 하나가 나왔습니다.")
+    else:
+        tc.explain(
+            f"{opens:,}번 중 {n_bad:,}번({n_bad / opens:.2%})은 구성품 {len(names)}종이 아닌 결과가 나왔습니다.",
+            "상자에 없는 아이템이 나오거나, 열었는데 아무것도 안 나오는(None) 버그일 수 있어요.",
+        )
+    assert not n_bad, f"구성품 외 결과 {n_bad}번: {others}"
+
+
 # VSCode 오른쪽 위 ▷(Run Python File) 버튼으로 이 파일을 직접 실행했을 때도
 # pytest로 테스트를 돌려 보고서를 보여준다. (C#의 Main 메서드 역할)
 if __name__ == "__main__":
